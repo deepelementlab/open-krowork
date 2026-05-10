@@ -57,7 +57,7 @@ You:  Double-click the shortcut. App runs. No Claude needed anymore.
 ✓ App "todo-manager" created
 ✓ Dependencies installed (flask)
 ✓ Desktop shortcut created: ~/Desktop/KroWork - Todo Manager.lnk
-✓ Running at http://127.0.0.1:5000
+✓ Click to run the application
 ```
 
 ### What you get
