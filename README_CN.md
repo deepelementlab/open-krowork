@@ -58,7 +58,7 @@ KroWork: 自动生成完整应用 → 安装依赖 → 创建桌面快捷方式
 ✓ 应用 "todo-manager" 创建成功
 ✓ 依赖已安装 (flask)
 ✓ 桌面快捷方式已创建: ~/Desktop/KroWork - Todo管理器.lnk
-✓ 运行在 http://127.0.0.1:5000
+✓ 双击运行
 ```
 
 ### 你会得到什么
@@ -208,7 +208,7 @@ git clone https://github.com/YOUR_USERNAME/open-krowork.git
 cd open-krowork
 
 # 安装为 Claude Code 插件
-claude plugin add .
+claude --plugin-dir .
 ```
 
 安装完成，重启 Claude Code 即可使用。
