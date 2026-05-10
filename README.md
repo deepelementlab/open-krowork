@@ -207,7 +207,7 @@ git clone https://github.com/YOUR_USERNAME/open-krowork.git
 cd open-krowork
 
 # Install as a Claude Code plugin
-claude plugin add .
+claude --plugin-dir .
 ```
 
 That's it. Restart Claude Code and KroWork is ready.
