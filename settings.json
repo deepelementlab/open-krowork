@@ -1,0 +1,9 @@
+{
+  "krowork": {
+    "apps_dir": "~/.krowork/apps",
+    "port_range_start": 5000,
+    "port_range_end": 9999,
+    "default_template": "web_app",
+    "auto_open_browser": true
+  }
+}

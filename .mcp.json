@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "krowork": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/main.py"],
+      "env": {
+        "KROWORK_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}",
+        "KROWORK_PLUGIN_DATA": "${CLAUDE_PLUGIN_DATA}"
+      }
+    }
+  }
+}

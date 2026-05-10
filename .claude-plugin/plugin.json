@@ -1,0 +1,11 @@
+{
+  "name": "krowork",
+  "version": "0.1.0",
+  "description": "Turn workflows into local apps via natural language. Create once, use forever.",
+  "author": {
+    "name": "KroWork"
+  },
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

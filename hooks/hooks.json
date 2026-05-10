@@ -1,0 +1,12 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python -c \"import os; os.makedirs(os.path.expanduser('~/.krowork/apps'), exist_ok=True)\""
+        }
+      ]
+    }
+  ]
+}
