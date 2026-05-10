@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Claude_Code-Plugin-blue?style=for-the-badge" alt="Claude Code Plugin">
+  <img src="https://img.shields.io/badge/Claude_Code-MCP_Server-blue?style=for-the-badge" alt="Claude Code MCP">
   <img src="https://img.shields.io/badge/Python-3.9+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge" alt="Platform">
@@ -24,7 +24,7 @@
 
 ---
 
-> **About this project:** Open-KroWork is an open-source implementation of the [KroWork](https://krowork.com/) concept — turning natural language workflows into local desktop apps. This is a community-driven project and is **not** affiliated with Kuaishou (快手) or the official KroWork team. Built for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as a plugin.
+> **About this project:** Open-KroWork is an open-source implementation of the [KroWork](https://krowork.com/) concept — turning natural language workflows into local desktop apps. This is a community-driven project and is **not** affiliated with Kuaishou (快手) or the official KroWork team. Built as an [MCP server](https://modelcontextprotocol.io/) for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
 ---
 
@@ -57,7 +57,7 @@ You:  Double-click the shortcut. App runs. No Claude needed anymore.
 ✓ App "todo-manager" created
 ✓ Dependencies installed (flask)
 ✓ Desktop shortcut created: ~/Desktop/KroWork - Todo Manager.lnk
-✓ Click to run the application
+✓ Running at http://127.0.0.1:5000
 ```
 
 ### What you get
@@ -202,15 +202,75 @@ A complete Flask web application with:
 ### Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/YOUR_USERNAME/open-krowork.git
 cd open-krowork
 
-# Install as a Claude Code plugin
-claude --plugin-dir .
+# Install Python dependencies (3 packages only)
+pip install -r requirements.txt
 ```
 
-That's it. Restart Claude Code and KroWork is ready.
+### Usage Mode 1: Plugin (Recommended)
+
+```bash
+claude --plugin-dir /path/to/open-krowork
+```
+
+`--plugin-dir` loads `.claude-plugin/plugin.json` and registers the MCP server automatically.
+
+**What you get:**
+
+| Feature | Available |
+|---|---|
+| Slash commands (`/krowork:create`, `/krowork:run`, etc.) | Yes |
+| MCP tools (called by Claude automatically) | Yes |
+| Skills workflow (guided step-by-step) | Yes |
+
+**How to use:** Type `/krowork:create`, `/krowork:list`, `/krowork:run`, etc. directly.
+
+### Usage Mode 2: MCP Server (Global)
+
+If you want KroWork available in **every** Claude Code session, regardless of directory:
+
+```bash
+# Register once:
+claude mcp add krowork -s user -- python /path/to/open-krowork/server/main.py
+
+# Then just run `claude` from anywhere:
+claude
+```
+
+**What you get:**
+
+| Feature | Available |
+|---|---|
+| Slash commands (`/krowork:create`, etc.) | No |
+| MCP tools (called by Claude automatically) | Yes |
+| Skills workflow | No |
+
+**How to use:** No slash commands. Just describe what you want in natural language and Claude will call the tools automatically. Examples:
+
+```
+You:  Create a bookmark manager app with tags
+Claude: [calls krowork_create_app("bookmark-manager", "Bookmark Manager - ...")]
+
+You:  List all my apps
+Claude: [calls krowork_list_apps]
+
+You:  Run the bookmark-manager app
+Claude: [calls krowork_run_app("bookmark-manager")]
+```
+
+Run `claude mcp list` to verify. Both modes can coexist.
+
+**Dependencies** (only 3):
+
+| Package | Version | Used By |
+|---|---|---|
+| `requests` | >=2.28 | Web scraping, data sources, API calls |
+| `beautifulsoup4` | >=4.11 | HTML parsing, web scraping |
+| `Pillow` | >=9.0 | App icon generation |
+
+Restart Claude Code and KroWork is ready. Run `claude mcp list` to verify.
 
 ### Usage
 
@@ -236,13 +296,13 @@ claude
 
 ```
 open-krowork/
-├── .claude-plugin/
-│   └── plugin.json          # Plugin manifest
-├── .mcp.json                # MCP server config
-├── settings.json            # User settings
+├── requirements.txt          # Python dependencies (3 packages)
+├── install.sh                # One-click installer (macOS/Linux)
+├── install.bat               # One-click installer (Windows)
+├── settings.json             # User settings
 ├── hooks/
-│   └── hooks.json           # Lifecycle hooks
-├── server/                  # Core engine
+│   └── hooks.json            # Lifecycle hooks
+├── server/                   # Core engine (registered via `claude mcp add`)
 │   ├── main.py              # MCP server (33 tools, stdio transport)
 │   ├── app_manager.py       # App CRUD + desktop shortcuts
 │   ├── code_generator.py    # Auto-code generation (3 templates)

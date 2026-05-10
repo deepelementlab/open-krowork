@@ -1,6 +1,6 @@
 {
   "name": "krowork",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Turn workflows into local apps via natural language. Create once, use forever.",
   "author": {
     "name": "KroWork"

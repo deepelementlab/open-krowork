@@ -4,7 +4,7 @@
 
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Claude_Code-插件-blue?style=for-the-badge&labelColor=1a1a2e" alt="Claude Code Plugin">
+  <img src="https://img.shields.io/badge/Claude_Code-MCP_服务器-blue?style=for-the-badge&labelColor=1a1a2e" alt="Claude Code MCP">
   <img src="https://img.shields.io/badge/Python-3.9+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/平台-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge" alt="Platform">
@@ -25,7 +25,7 @@
 
 ---
 
-> **关于本项目：** Open-KroWork 是 [KroWork](https://krowork.com/) 核心理念的开源实现 — 将自然语言工作流转化为本地桌面应用。本项目由社区驱动，**非**快手官方产品，也非 KroWork 团队开发。基于 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 插件架构构建。
+> **关于本项目：** Open-KroWork 是 [KroWork](https://krowork.com/) 核心理念的开源实现 — 将自然语言工作流转化为本地桌面应用。本项目由社区驱动，**非**快手官方产品，也非 KroWork 团队开发。基于 [MCP 协议](https://modelcontextprotocol.io/)构建，作为 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 的 MCP 服务器运行。
 
 ---
 
@@ -58,7 +58,7 @@ KroWork: 自动生成完整应用 → 安装依赖 → 创建桌面快捷方式
 ✓ 应用 "todo-manager" 创建成功
 ✓ 依赖已安装 (flask)
 ✓ 桌面快捷方式已创建: ~/Desktop/KroWork - Todo管理器.lnk
-✓ 双击运行
+✓ 运行在 http://127.0.0.1:5000
 ```
 
 ### 你会得到什么
@@ -203,15 +203,75 @@ KroWork: 自动生成完整应用 → 安装依赖 → 创建桌面快捷方式
 ### 安装
 
 ```bash
-# 克隆仓库
 git clone https://github.com/YOUR_USERNAME/open-krowork.git
 cd open-krowork
 
-# 安装为 Claude Code 插件
-claude --plugin-dir .
+# 安装 Python 依赖（仅 3 个包）
+pip install -r requirements.txt
 ```
 
-安装完成，重启 Claude Code 即可使用。
+### 使用方式 1：Plugin 模式（推荐）
+
+```bash
+claude --plugin-dir /path/to/open-krowork
+```
+
+`--plugin-dir` 会自动加载 `.claude-plugin/plugin.json` 并注册 MCP 服务器。
+
+**可用功能：**
+
+| 功能 | 是否可用 |
+|---|---|
+| 斜杠命令（`/krowork:create`、`/krowork:run` 等） | 可用 |
+| MCP 工具（Claude 自动调用） | 可用 |
+| Skills 引导流程（分步引导） | 可用 |
+
+**使用方式：** 直接输入 `/krowork:create`、`/krowork:list`、`/krowork:run` 等斜杠命令。
+
+### 使用方式 2：MCP Server 模式（全局）
+
+如果你希望在**任意目录**启动 Claude Code 都能使用 KroWork：
+
+```bash
+# 一次性注册：
+claude mcp add krowork -s user -- python /path/to/open-krowork/server/main.py
+
+# 之后直接 `claude` 即可，不限目录：
+claude
+```
+
+**可用功能：**
+
+| 功能 | 是否可用 |
+|---|---|
+| 斜杠命令（`/krowork:create` 等） | 不可用 |
+| MCP 工具（Claude 自动调用） | 可用 |
+| Skills 引导流程 | 不可用 |
+
+**使用方式：** 没有斜杠命令，直接用自然语言描述需求，Claude 会自动调用对应工具。示例：
+
+```
+你: 帮我创建一个书签管理应用，支持标签分类
+Claude: [自动调用 krowork_create_app("bookmark-manager", "书签管理器 - ...")]
+
+你: 列出我所有的应用
+Claude: [自动调用 krowork_list_apps]
+
+你: 运行 bookmark-manager
+Claude: [自动调用 krowork_run_app("bookmark-manager")]
+```
+
+运行 `claude mcp list` 验证。两种模式可以共存。
+
+**依赖清单**（仅 3 个）：
+
+| 包名 | 版本 | 用途 |
+|---|---|---|
+| `requests` | >=2.28 | 网页抓取、数据源、API 调用 |
+| `beautifulsoup4` | >=4.11 | HTML 解析、网页抓取 |
+| `Pillow` | >=9.0 | 应用图标生成 |
+
+重启 Claude Code 即可使用。运行 `claude mcp list` 可验证安装。
 
 ### 使用
 
@@ -237,13 +297,13 @@ claude
 
 ```
 open-krowork/
-├── .claude-plugin/
-│   └── plugin.json          # 插件清单
-├── .mcp.json                # MCP 服务器配置
-├── settings.json            # 用户设置
+├── requirements.txt          # Python 依赖（3 个包）
+├── install.sh                # 一键安装（macOS/Linux）
+├── install.bat               # 一键安装（Windows）
+├── settings.json             # 用户设置
 ├── hooks/
-│   └── hooks.json           # 生命周期钩子
-├── server/                  # 核心引擎
+│   └── hooks.json            # 生命周期钩子
+├── server/                   # 核心引擎（通过 claude mcp add 注册）
 │   ├── main.py              # MCP 服务器（33个工具，stdio传输）
 │   ├── app_manager.py       # 应用管理 + 桌面快捷方式
 │   ├── code_generator.py    # 自动代码生成（3种模板）
