@@ -29,7 +29,11 @@
 
 ---
 
+<img width="1990" height="720" alt="Screenshot - 2026-05-11 10 44 35" src="https://github.com/user-attachments/assets/5122b44e-4691-4fdd-8566-4871c7f90446" />
+
 ## 它能做什么
+
+**核心理念：利用claude code强大编码能力,「跑通一次，变成应用」**
 
 ```
 你:  "帮我做一个股票智能分析台，输入股票代码，自动展示价格趋势并生成分析报告"
@@ -37,7 +41,9 @@ KroWork: 自动生成完整应用 → 安装依赖 → 创建桌面快捷方式
 你:  双击桌面图标，应用直接运行。不再需要 Claude。
 ```
 
-**核心理念：「跑通一次，变成应用」**
+<img width="2574" height="1070" alt="Screenshot - 2026-05-11 10 53 04" src="https://github.com/user-attachments/assets/e4bbbbf6-2e0a-4657-95fd-a9b8c529c47a" />
+
+
 
 | 用 KroWork 之前 | 用 KroWork 之后 |
 |---|---|
