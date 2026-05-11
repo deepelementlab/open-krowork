@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -83,7 +84,7 @@ def create_app(app_name: str, description: str, code: str = "",
         "version": "1.0.0",
         "created_at": datetime.now().isoformat(),
         "updated_at": datetime.now().isoformat(),
-        "status": "created",
+        "status": "setting_up",
         "template": "web_app",
         "config": config or {},
     }
@@ -110,12 +111,23 @@ def create_app(app_name: str, description: str, code: str = "",
             html_template, encoding="utf-8"
         )
 
-    # Create virtual environment and install dependencies
-    _setup_venv(app_dir, requirements)
-
-    # Create launcher script and desktop shortcut
+    # Create launcher script and desktop shortcut immediately
+    # (they just write files, don't need venv to exist)
     _create_launcher(app_dir, app_name, description)
     shortcut_path = _create_shortcut(app_dir, app_name, description)
+
+    # Create virtual environment in background thread to avoid
+    # blocking the MCP stdio communication (venv + pip can take minutes)
+    final_req = requirements
+    def _bg_setup():
+        try:
+            ok = _setup_venv(app_dir, final_req)
+            _update_app_status(app_dir, "ready" if ok else "setup_failed")
+        except Exception:
+            _update_app_status(app_dir, "setup_failed")
+
+    t = threading.Thread(target=_bg_setup, daemon=True)
+    t.start()
 
     return {
         "success": True,
@@ -123,7 +135,12 @@ def create_app(app_name: str, description: str, code: str = "",
         "app_name": app_name,
         "app_dir": str(app_dir),
         "shortcut": shortcut_path,
-        "message": f"App '{app_name}' created successfully at {app_dir}",
+        "status": "setting_up",
+        "message": (
+            f"App '{app_name}' created at {app_dir}. "
+            f"Dependencies are installing in background — "
+            f"the app will be ready to run shortly."
+        ),
     }
 
 
@@ -238,10 +255,10 @@ def update_app(app_name: str, code: str = None, html_template: str = None,
             html_template, encoding="utf-8"
         )
 
-    # Update requirements and reinstall
+    # Update requirements and reinstall (in background to avoid blocking MCP)
     if requirements is not None:
         (app_dir / "requirements.txt").write_text(requirements, encoding="utf-8")
-        _setup_venv(app_dir, requirements)
+        meta["status"] = "setting_up"
 
     # Update metadata
     if description is not None:
@@ -258,6 +275,17 @@ def update_app(app_name: str, code: str = None, html_template: str = None,
     (app_dir / "app.json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+    # Start background venv rebuild AFTER writing metadata to avoid race
+    if requirements is not None:
+        def _bg_reinstall():
+            try:
+                ok = _setup_venv(app_dir, requirements)
+                _update_app_status(app_dir, "ready" if ok else "setup_failed")
+            except Exception:
+                _update_app_status(app_dir, "setup_failed")
+
+        threading.Thread(target=_bg_reinstall, daemon=True).start()
 
     return {
         "success": True,
@@ -332,6 +360,20 @@ def _setup_venv(app_dir: Path, requirements: str) -> bool:
         return True
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
+
+
+def _update_app_status(app_dir: Path, status: str):
+    """Update the status field in app.json (thread-safe for single writer)."""
+    app_json = app_dir / "app.json"
+    try:
+        meta = json.loads(app_json.read_text(encoding="utf-8"))
+        meta["status"] = status
+        meta["updated_at"] = datetime.now().isoformat()
+        app_json.write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except (json.JSONDecodeError, OSError):
+        pass
 
 
 def get_venv_python(app_dir: Path) -> Optional[str]:

@@ -56,8 +56,28 @@ def start_app(app_name: str, port: Optional[int] = None) -> dict:
 
     app_dir = get_app_dir(app_name)
 
-    # Get Python from venv, or fall back to system Python
-    python = get_venv_python(app_dir) or sys.executable
+    # Check if venv is ready (background setup might still be running)
+    venv_python = get_venv_python(app_dir)
+    if not venv_python:
+        # Check app status to give a helpful error message
+        app_info = get_app(app_name)
+        status = app_info.get("status", "unknown")
+        if status == "setting_up":
+            return {
+                "error": (
+                    f"App '{app_name}' is still installing dependencies. "
+                    f"Please wait a moment and try again."
+                )
+            }
+        # venv missing but not setting up — try to create it synchronously
+        # (edge case: app was created before background-setup fix)
+        from app_manager import _setup_venv
+        req_path = app_dir / "requirements.txt"
+        req = req_path.read_text(encoding="utf-8") if req_path.exists() else "flask"
+        _setup_venv(app_dir, req)
+        venv_python = get_venv_python(app_dir)
+
+    python = venv_python or sys.executable
 
     # Find a free port
     if port is None:

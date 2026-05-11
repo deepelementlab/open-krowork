@@ -57,7 +57,8 @@ TOOLS = [
             "Create a new KroWork local app. If 'code' is not provided, "
             "automatically generates a complete working application based on "
             "the description. Generates project structure with Flask web server, "
-            "installs dependencies, and creates a desktop shortcut."
+            "creates a desktop shortcut, and installs dependencies in the background. "
+            "The app will be ready to run shortly after creation."
         ),
         "inputSchema": {
             "type": "object",
