@@ -470,14 +470,13 @@ def _apply_add_search(code: str, html: str, params: dict) -> dict:
 
     # Check if search already exists in code
     if 'request.args.get("q"' not in code and "request.args.get('q'" not in code:
-        # Insert search logic after the first _load_data() in GET route
-        # Strategy: find "items = _load_data()" in the GET handler and add search after it
         load_data_marker = "items = _load_data()"
-        search_insert = '    items = _load_data()\n    q = request.args.get("q", "").lower()\n    if q:\n        items = [i for i in items if any(q in str(v).lower() for v in i.values())]'
+        search_append = '\n    q = request.args.get("q", "").lower()\n    if q:\n        items = [i for i in items if any(q in str(v).lower() for v in i.values())]'
 
-        # Only replace the FIRST occurrence (in the GET handler)
         if load_data_marker in code:
-            code = code.replace(load_data_marker, search_insert, 1)
+            first_pos = code.index(load_data_marker)
+            end_pos = first_pos + len(load_data_marker)
+            code = code[:end_pos] + search_append + code[end_pos:]
 
     # Add search input to HTML
     search_input = '<input type="text" id="search-input" placeholder="搜索..." oninput="searchItems()" style="flex:1;max-width:300px">'

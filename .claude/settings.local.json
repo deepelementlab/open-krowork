@@ -1,6 +1,14 @@
 {
+  "permissions": {
+    "allow": [
+      "mcp__krowork__krowork_create_app",
+      "mcp__krowork__krowork_delete_app",
+      "mcp__krowork__krowork_run_app",
+      "mcp__krowork__krowork_stop_app"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "krowork"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

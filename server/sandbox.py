@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from pathlib import Path
@@ -28,7 +29,7 @@ def _find_free_port(start: int = 5000, end: int = 9999) -> int:
     raise RuntimeError(f"No available port in range {start}-{end}")
 
 
-def _wait_for_port(port: int, timeout: float = 15.0) -> bool:
+def _wait_for_port(port: int, timeout: float = 8.0) -> bool:
     """Wait until a port is accepting connections."""
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -59,7 +60,6 @@ def start_app(app_name: str, port: Optional[int] = None) -> dict:
     # Check if venv is ready (background setup might still be running)
     venv_python = get_venv_python(app_dir)
     if not venv_python:
-        # Check app status to give a helpful error message
         app_info = get_app(app_name)
         status = app_info.get("status", "unknown")
         if status == "setting_up":
@@ -69,13 +69,12 @@ def start_app(app_name: str, port: Optional[int] = None) -> dict:
                     f"Please wait a moment and try again."
                 )
             }
-        # venv missing but not setting up — try to create it synchronously
-        # (edge case: app was created before background-setup fix)
-        from app_manager import _setup_venv
-        req_path = app_dir / "requirements.txt"
-        req = req_path.read_text(encoding="utf-8") if req_path.exists() else "flask"
-        _setup_venv(app_dir, req)
-        venv_python = get_venv_python(app_dir)
+        return {
+            "error": (
+                f"App '{app_name}' virtual environment is not ready (status: {status}). "
+                f"Try deleting and recreating the app."
+            )
+        }
 
     python = venv_python or sys.executable
 
@@ -105,6 +104,7 @@ def start_app(app_name: str, port: Optional[int] = None) -> dict:
             [python, str(main_py)],
             cwd=str(app_dir),
             env=env,
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
@@ -138,9 +138,8 @@ def start_app(app_name: str, port: Optional[int] = None) -> dict:
             # Process alive but port not ready — still return success
             # (some apps may take longer to bind)
 
-        # Try to open browser
         try:
-            webbrowser.open(url)
+            threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
         except Exception:
             pass
 

@@ -135,12 +135,37 @@ def _analyze_description(app_name: str, description: str, config: dict) -> tuple
     desc_lower = description.lower()
     name_lower = app_name.lower()
 
-    # Extract entity info from config or infer from name
-    if config.get("fields"):
-        return config.get("app_type", "crud"), config
-
     entity_name = config.get("entity_name", "")
     fields = config.get("fields", [])
+
+    if config.get("fields") and not entity_name:
+        parts = name_lower.replace("_", "-").split("-")
+        skip = {"app", "the", "a", "an", "my", "manager", "tracker", "tool",
+                "system", "dashboard", "generator", "viewer", "editor", "analyzer"}
+        meaningful = [p for p in parts if p not in skip and len(p) > 0]
+        entity_name = meaningful[0] if meaningful else parts[-1] if parts else "item"
+
+    if config.get("fields"):
+        app_type = config.get("app_type", "")
+        if not app_type:
+            desc_lower2 = description.lower()
+            api_kw = ["api", "股票", "stock", "天气", "weather", "新闻", "news", "热点", "trending", "监控", "monitor", "追踪", "track"]
+            tool_kw = ["生成器", "generator", "转换", "convert", "计算", "calc"]
+            if any(kw in desc_lower2 for kw in api_kw):
+                app_type = "api_dashboard"
+            elif any(kw in desc_lower2 for kw in tool_kw):
+                app_type = "tool"
+            else:
+                app_type = "crud"
+        entity_info = {
+            "entity_name": entity_name,
+            "entity_label": entity_name.replace("-", " ").replace("_", " ").title(),
+            "fields": config["fields"],
+            "app_type": app_type,
+            "app_name": app_name,
+            "description": description,
+        }
+        return app_type, entity_info
 
     # Detect app type from description keywords
     api_keywords = ["api", "股票", "stock", "天气", "weather", "汇率", "exchange",
@@ -238,12 +263,56 @@ def _infer_fields(entity_name: str, desc_lower: str, app_type: str) -> list:
     return base_fields
 
 
+IRREGULAR_PLURALS = {
+    "news": "news",
+    "information": "information",
+    "data": "data",
+    "music": "music",
+    "weather": "weather",
+    "money": "money",
+    "advice": "advice",
+    "furniture": "furniture",
+    "equipment": "equipment",
+    "person": "people",
+    "man": "men",
+    "woman": "women",
+    "child": "children",
+    "mouse": "mice",
+    "goose": "geese",
+    "tooth": "teeth",
+    "foot": "feet",
+    "ox": "oxen",
+    "leaf": "leaves",
+    "life": "lives",
+    "knife": "knives",
+    "wife": "wives",
+    "half": "halves",
+    "self": "selves",
+    "shelf": "shelves",
+    "wolf": "wolves",
+    "calf": "calves",
+    "loaf": "loaves",
+    "thesis": "theses",
+    "analysis": "analyses",
+    "crisis": "crises",
+    "basis": "bases",
+    "diagnosis": "diagnoses",
+    "index": "indices",
+    "matrix": "matrices",
+    "vertex": "vertices",
+}
+
+
 def _pluralize(name: str) -> str:
-    """Simple English pluralization."""
+    lower = name.lower()
+    if lower in IRREGULAR_PLURALS:
+        return IRREGULAR_PLURALS[lower]
     if name.endswith("s") or name.endswith("x") or name.endswith("z"):
         return name + "es"
     elif name.endswith("y") and len(name) > 1 and name[-2] not in "aeiou":
         return name[:-1] + "ies"
+    elif name.endswith("sh") or name.endswith("ch"):
+        return name + "es"
     else:
         return name + "s"
 
@@ -580,18 +649,24 @@ def _generate_api_dashboard_app(app_name: str, description: str, info: dict) -> 
     Dashboard apps have a query input area, results display with stats cards,
     and optional chart rendering via Chart.js.
     """
-    entity = info["entity_name"]
+    entity = info["entity_name"].lower()
+
+    # Domain-specific generators
+    if entity in ("stock", "股票"):
+        return _generate_stock_dashboard(app_name, description, info)
+
+    # Generic dashboard fallback
+    entity_name = info["entity_name"]
     entity_label = info["entity_label"]
     fields = info["fields"]
     title = description.split("-")[0].strip() if "-" in description else description
     title = title.strip() or app_name.replace("-", " ").title()
-    ep = _pluralize(entity)
 
     # Python backend with search/query API endpoint
-    code = _build_dashboard_python(app_name, entity, fields)
+    code = _build_dashboard_python(app_name, entity_name, fields)
 
     # HTML with dashboard layout: query input + results + stats cards
-    html = _build_dashboard_html(app_name, description, entity, entity_label, fields)
+    html = _build_dashboard_html(app_name, description, entity_name, entity_label, fields)
 
     return {
         "code": code,
@@ -627,6 +702,629 @@ def _generate_tool_app(app_name: str, description: str, info: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Dashboard Template Builder
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Stock Dashboard — real API integration
+# ---------------------------------------------------------------------------
+
+def _generate_stock_dashboard(app_name: str, description: str, info: dict) -> dict:
+    """Generate a stock analysis dashboard with real market data from Sina Finance."""
+    title = description.split("-")[0].strip() if "-" in description else description
+    title = title.strip() or app_name.replace("-", " ").title()
+
+    code = _build_stock_dashboard_python(app_name)
+    html = _build_stock_dashboard_html(app_name, title, description)
+
+    return {
+        "code": code,
+        "html_template": html,
+        "requirements": "flask\nrequests",
+    }
+
+
+def _build_stock_dashboard_python(app_name: str) -> str:
+    """Build Flask backend with real-time stock data fetching."""
+    return '''import os
+import json
+import re
+import uuid
+from datetime import datetime
+from flask import Flask, send_file, request, jsonify
+import requests as http_requests
+
+app = Flask(__name__)
+app.config["JSON_AS_ASCII"] = False
+
+APP_NAME = "''' + app_name + '''"
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+HISTORY_FILE = os.path.join(DATA_DIR, "query_history.json")
+
+
+def _load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
+    return []
+
+
+def _save_history(items):
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+
+
+def _normalize_code(code):
+    """Normalize stock code: add sh/sz prefix if missing."""
+    code = code.strip().upper()
+    # Remove existing prefix
+    for prefix in ("SH", "SZ", "BJ"):
+        if code.startswith(prefix):
+            code = code[len(prefix):]
+            break
+    # Remove non-digits
+    code = re.sub(r"\\D", "", code)
+    if not code:
+        return ""
+    # Determine market
+    if code.startswith("6") or code.startswith("9"):
+        return "sh" + code
+    elif code.startswith("0") or code.startswith("3"):
+        return "sz" + code
+    elif code.startswith("8") or code.startswith("4"):
+        return "bj" + code
+    return "sh" + code
+
+
+def _fetch_realtime(symbol):
+    """Fetch real-time quote from Sina Finance API."""
+    full_code = _normalize_code(symbol)
+    if not full_code:
+        return None
+    try:
+        url = f"http://hq.sinajs.cn/list={full_code}"
+        headers = {"Referer": "http://finance.sina.com.cn"}
+        resp = http_requests.get(url, headers=headers, timeout=10)
+        resp.encoding = "gbk"
+        match = re.search(r'="([^"]*)"', resp.text)
+        if not match or not match.group(1).strip():
+            return None
+        parts = match.group(1).split(",")
+        if len(parts) < 32:
+            return None
+        name = parts[0]
+        open_price = float(parts[1]) if parts[1] else 0
+        prev_close = float(parts[2]) if parts[2] else 0
+        price = float(parts[3]) if parts[3] else 0
+        high = float(parts[4]) if parts[4] else 0
+        low = float(parts[5]) if parts[5] else 0
+        volume = int(float(parts[8])) if parts[8] else 0
+        amount = float(parts[9]) if parts[9] else 0
+        change = price - prev_close if prev_close else 0
+        change_pct = (change / prev_close * 100) if prev_close else 0
+        return {
+            "symbol": full_code,
+            "name": name,
+            "price": round(price, 2),
+            "open": round(open_price, 2),
+            "prev_close": round(prev_close, 2),
+            "high": round(high, 2),
+            "low": round(low, 2),
+            "change": round(change, 2),
+            "change_pct": round(change_pct, 2),
+            "volume": volume,
+            "amount": round(amount, 2),
+            "time": parts[30] + " " + parts[31] if len(parts) > 31 else "",
+        }
+    except Exception:
+        return None
+
+
+def _fetch_history(symbol, days=30):
+    """Fetch daily K-line history from Sina Finance."""
+    full_code = _normalize_code(symbol)
+    if not full_code:
+        return []
+    try:
+        url = (
+            f"https://quotes.sina.cn/cn/api/jsonp_v2.php/var=/"
+            f"CN_MarketDataService.getKLineData?symbol={full_code}"
+            f"&scale=240&ma=no&datalen={days}"
+        )
+        resp = http_requests.get(url, timeout=10)
+        # Strip JSONP wrapper: "var=([...])" → [...]
+        text = resp.text.strip()
+        start = text.find("(")
+        end = text.rfind(")")
+        if start >= 0 and end > start:
+            import json as _json
+            data = _json.loads(text[start + 1:end])
+        else:
+            data = resp.json()
+        if not isinstance(data, list):
+            return []
+        result = []
+        for item in data[-days:]:
+            result.append({
+                "date": item.get("day", ""),
+                "open": float(item.get("open", 0)),
+                "high": float(item.get("high", 0)),
+                "low": float(item.get("low", 0)),
+                "close": float(item.get("close", 0)),
+                "volume": int(float(item.get("volume", 0))),
+            })
+        return result
+    except Exception:
+        return []
+
+
+def _generate_analysis(quote, history):
+    """Generate simple technical analysis from quote and history data."""
+    if not quote:
+        return ""
+    lines = []
+    name = quote.get("name", "")
+    price = quote.get("price", 0)
+    change_pct = quote.get("change_pct", 0)
+    lines.append(f"## {name} 分析报告")
+    lines.append(f"当前价格: {price}")
+
+    # Trend
+    if change_pct > 2:
+        lines.append(f"趋势: 强势上涨 (+{change_pct}%)")
+    elif change_pct > 0:
+        lines.append(f"趋势: 小幅上涨 (+{change_pct}%)")
+    elif change_pct > -2:
+        lines.append(f"趋势: 小幅下跌 ({change_pct}%)")
+    else:
+        lines.append(f"趋势: 显著下跌 ({change_pct}%)")
+
+    # Price range
+    high = quote.get("high", 0)
+    low = quote.get("low", 0)
+    if high and low:
+        amplitude = round((high - low) / low * 100, 2) if low else 0
+        lines.append(f"今日振幅: {amplitude}% (最高 {high}, 最低 {low})")
+
+    # History-based analysis
+    if len(history) >= 5:
+        closes = [h["close"] for h in history]
+        ma5 = round(sum(closes[-5:]) / 5, 2)
+        lines.append(f"5日均线: {ma5}")
+        if price > ma5:
+            lines.append("均线判断: 价格在5日均线上方，短期偏多")
+        else:
+            lines.append("均线判断: 价格在5日均线下方，短期偏弱")
+
+    if len(history) >= 20:
+        closes20 = [h["close"] for h in history]
+        ma20 = round(sum(closes20[-20:]) / 20, 2)
+        lines.append(f"20日均线: {ma20}")
+
+    if len(history) >= 2:
+        vol_today = history[-1].get("volume", 0)
+        vol_yesterday = history[-2].get("volume", 0)
+        if vol_yesterday > 0:
+            vol_ratio = round(vol_today / vol_yesterday, 2)
+            if vol_ratio > 1.5:
+                lines.append(f"成交量: 明显放量 (量比 {vol_ratio})")
+            elif vol_ratio < 0.5:
+                lines.append(f"成交量: 明显缩量 (量比 {vol_ratio})")
+            else:
+                lines.append(f"成交量: 量比 {vol_ratio}")
+
+    # Support/Resistance from history
+    if history:
+        hist_high = max(h["high"] for h in history)
+        hist_low = min(h["low"] for h in history)
+        lines.append(f"近期阻力位: {hist_high}")
+        lines.append(f"近期支撑位: {hist_low}")
+
+    # Overall
+    if change_pct > 0 and len(history) >= 5 and price > sum(closes[-5:]) / 5:
+        lines.append("综合评估: 偏多，可关注上方阻力位突破情况")
+    elif change_pct < 0 and len(history) >= 5 and price < sum(closes[-5:]) / 5:
+        lines.append("综合评估: 偏弱，建议关注下方支撑位")
+    else:
+        lines.append("综合评估: 震荡整理，建议观望")
+
+    return "\\n".join(lines)
+
+
+@app.route("/")
+def index():
+    return send_file(os.path.join(os.path.dirname(__file__), "templates", "index.html"))
+
+
+@app.route("/api/stock/query", methods=["GET"])
+def query_stock():
+    """Query real-time stock data + history + analysis."""
+    code = request.args.get("code", "").strip()
+    if not code:
+        return jsonify({"error": "Please provide stock code"}), 400
+
+    quote = _fetch_realtime(code)
+    if not quote:
+        return jsonify({"error": f"Cannot find stock: {code}"}), 404
+
+    history = _fetch_history(code, 30)
+    analysis = _generate_analysis(quote, history)
+
+    # Save to query history
+    record = {
+        "id": str(uuid.uuid4())[:8],
+        "symbol": quote["symbol"],
+        "name": quote["name"],
+        "price": quote["price"],
+        "change_pct": quote["change_pct"],
+        "analysis": analysis,
+        "queried_at": datetime.now().isoformat(),
+    }
+    hist = _load_history()
+    hist.insert(0, record)
+    hist = hist[:50]  # keep last 50 queries
+    _save_history(hist)
+
+    return jsonify({
+        "quote": quote,
+        "history": history,
+        "analysis": analysis,
+    })
+
+
+@app.route("/api/stocks", methods=["GET"])
+def get_history():
+    """Get query history."""
+    items = _load_history()
+    q = request.args.get("q", "").lower()
+    if q:
+        items = [i for i in items if q in i.get("name", "").lower()
+                 or q in i.get("symbol", "").lower()]
+    return jsonify(items)
+
+
+@app.route("/api/stocks/clear", methods=["POST"])
+def clear_history():
+    items = _load_history()
+    _save_history([])
+    return jsonify({"removed": len(items)})
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("KROWORK_PORT", 5000))
+    print(APP_NAME + " running at http://127.0.0.1:" + str(port))
+    app.run(host="127.0.0.1", port=port, debug=False)
+'''
+
+
+def _build_stock_dashboard_html(app_name: str, title: str, description: str) -> str:
+    """Build stock dashboard HTML with search, chart, and analysis."""
+    return '''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>''' + title + '''</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+               background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+        .header { background: #1a1a2e; padding: 16px 24px; border-bottom: 1px solid #2a2a3e;
+                  display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { font-size: 20px; color: #00d4ff; font-weight: 600; }
+        .header .subtitle { font-size: 13px; color: #888; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+        .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+                     gap: 12px; margin-bottom: 20px; }
+        .stat-card { background: #1a1a2e; border: 1px solid #2a2a3e; border-radius: 8px;
+                     padding: 14px; text-align: center; }
+        .stat-card .stat-value { font-size: 24px; font-weight: 700; color: #00d4ff; }
+        .stat-card .stat-label { font-size: 12px; color: #888; margin-top: 4px; }
+        .stat-card.up .stat-value { color: #ff4757; }
+        .stat-card.down .stat-value { color: #2ed573; }
+        .card { background: #1a1a2e; border: 1px solid #2a2a3e; border-radius: 8px;
+                padding: 20px; margin-bottom: 16px; }
+        .card h3 { color: #00d4ff; margin-bottom: 12px; font-size: 15px; }
+        .search-box { display: flex; gap: 10px; margin-bottom: 12px; }
+        .search-box input { background: #0f0f0f; border: 1px solid #2a2a3e; border-radius: 6px;
+                            padding: 12px 16px; color: #e0e0e0; font-size: 16px; flex: 1;
+                            outline: none; min-width: 0; }
+        .search-box input:focus { border-color: #00d4ff; }
+        .search-box input::placeholder { color: #555; }
+        button { background: #00d4ff; color: #0f0f0f; border: none; border-radius: 6px;
+                 padding: 12px 24px; font-size: 14px; font-weight: 600; cursor: pointer;
+                 transition: background 0.2s; white-space: nowrap; }
+        button:hover { background: #00b8d9; }
+        button:disabled { background: #333; color: #666; cursor: not-allowed; }
+        button.secondary { background: #2a2a3e; color: #e0e0e0; }
+        button.danger { background: #ff4757; color: #fff; }
+        button.small { padding: 6px 12px; font-size: 12px; }
+        .chart-container { position: relative; height: 280px; margin-bottom: 20px; }
+        .analysis-box { background: #0f0f0f; border: 1px solid #2a2a3e; border-radius: 6px;
+                        padding: 16px; font-size: 14px; line-height: 1.8; white-space: pre-wrap;
+                        color: #ccc; max-height: 300px; overflow-y: auto; }
+        .analysis-box .label { color: #00d4ff; font-weight: 600; }
+        .hot-stocks { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+        .hot-stocks button { background: #2a2a3e; color: #aaa; border: 1px solid #333;
+                             padding: 6px 14px; font-size: 12px; border-radius: 20px; }
+        .hot-stocks button:hover { border-color: #00d4ff; color: #00d4ff; background: #1a1a2e; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #2a2a3e;
+                 font-size: 13px; }
+        th { color: #00d4ff; font-weight: 600; font-size: 12px; }
+        tr:hover { background: rgba(0,212,255,0.03); }
+        .up { color: #ff4757; }
+        .down { color: #2ed573; }
+        .empty { text-align: center; padding: 40px; color: #555; }
+        .loading { text-align: center; padding: 40px; color: #00d4ff; }
+        .error-msg { background: #2a1515; border: 1px solid #ff4757; border-radius: 6px;
+                     padding: 12px 16px; color: #ff8888; margin-bottom: 16px; display: none; }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>''' + title + '''</h1>
+            <div class="subtitle">''' + description + '''</div>
+        </div>
+        <div style="display:flex;gap:8px">
+            <button class="secondary small" onclick="clearHistory()">清除历史</button>
+        </div>
+    </div>
+    <div class="container">
+        <!-- Search -->
+        <div class="card">
+            <h3>Stock Query</h3>
+            <div class="search-box">
+                <input type="text" id="stock-code" placeholder="Enter stock code (e.g. 600519, 000001)"
+                       onkeydown="if(event.key==='Enter')queryStock()">
+                <button id="btn-query" onclick="queryStock()">Query</button>
+            </div>
+            <div class="hot-stocks">
+                <button onclick="quickQuery('600519')">600519 Maotai</button>
+                <button onclick="quickQuery('000001')">000001 PingAn</button>
+                <button onclick="quickQuery('600036')">600036 CMB</button>
+                <button onclick="quickQuery('000858')">000858 Wuliangye</button>
+                <button onclick="quickQuery('601318')">601318 Ping An Insurance</button>
+                <button onclick="quickQuery('000333')">000333 Midea</button>
+            </div>
+        </div>
+
+        <div id="error-box" class="error-msg"></div>
+        <div id="loading" class="loading" style="display:none">Fetching data...</div>
+
+        <!-- Stats Cards -->
+        <div class="stats-row" id="stats-row" style="display:none">
+            <div class="stat-card"><div class="stat-value" id="s-name">-</div><div class="stat-label">Stock</div></div>
+            <div class="stat-card"><div class="stat-value" id="s-price">-</div><div class="stat-label">Price</div></div>
+            <div class="stat-card"><div class="stat-value" id="s-change">-</div><div class="stat-label">Change</div></div>
+            <div class="stat-card"><div class="stat-value" id="s-high">-</div><div class="stat-label">High</div></div>
+            <div class="stat-card"><div class="stat-value" id="s-low">-</div><div class="stat-label">Low</div></div>
+            <div class="stat-card"><div class="stat-value" id="s-vol">-</div><div class="stat-label">Volume</div></div>
+        </div>
+
+        <!-- Chart + Analysis -->
+        <div class="two-col" id="result-area" style="display:none">
+            <div>
+                <div class="card">
+                    <h3>30-Day Price Trend</h3>
+                    <div class="chart-container">
+                        <canvas id="priceChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="card">
+                    <h3>Analysis Report</h3>
+                    <div class="analysis-box" id="analysis-text">-</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Query History -->
+        <div class="card">
+            <h3>Query History</h3>
+            <div style="overflow-x:auto">
+                <table>
+                    <thead><tr>
+                        <th>#</th><th>Code</th><th>Name</th><th>Price</th>
+                        <th>Change%</th><th>Time</th><th>Action</th>
+                    </tr></thead>
+                    <tbody id="history-table"></tbody>
+                </table>
+            </div>
+            <div class="empty" id="empty-msg">No query history yet. Try searching a stock code above.</div>
+        </div>
+    </div>
+
+    <script>
+        let priceChart = null;
+
+        async function queryStock() {
+            const code = document.getElementById("stock-code").value.trim();
+            if (!code) return;
+            const btn = document.getElementById("btn-query");
+            btn.disabled = true;
+            btn.textContent = "Querying...";
+            document.getElementById("loading").style.display = "block";
+            document.getElementById("error-box").style.display = "none";
+            document.getElementById("result-area").style.display = "none";
+
+            try {
+                const res = await fetch("/api/stock/query?code=" + encodeURIComponent(code));
+                const data = await res.json();
+                if (!res.ok) {
+                    showError(data.error || "Query failed");
+                    return;
+                }
+                showQuote(data.quote);
+                showChart(data.history);
+                showAnalysis(data.analysis);
+                document.getElementById("result-area").style.display = "grid";
+                loadHistory();
+            } catch (e) {
+                showError("Network error: " + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "Query";
+                document.getElementById("loading").style.display = "none";
+            }
+        }
+
+        function quickQuery(code) {
+            document.getElementById("stock-code").value = code;
+            queryStock();
+        }
+
+        function showError(msg) {
+            const box = document.getElementById("error-box");
+            box.textContent = msg;
+            box.style.display = "block";
+        }
+
+        function fmtNum(n, decimals) {
+            if (n === undefined || n === null) return "-";
+            return Number(n).toLocaleString(undefined, {minimumFractionDigits: decimals || 2, maximumFractionDigits: decimals || 2});
+        }
+
+        function fmtVol(v) {
+            if (!v) return "-";
+            if (v >= 100000000) return (v / 100000000).toFixed(2) + "B";
+            if (v >= 10000) return (v / 10000).toFixed(0) + "W";
+            return v.toString();
+        }
+
+        function showQuote(q) {
+            const row = document.getElementById("stats-row");
+            row.style.display = "grid";
+            document.getElementById("s-name").textContent = q.name;
+            document.getElementById("s-price").textContent = fmtNum(q.price);
+            const chEl = document.getElementById("s-change");
+            const pct = q.change_pct;
+            chEl.textContent = (pct >= 0 ? "+" : "") + fmtNum(pct) + "%";
+            const card = chEl.closest(".stat-card");
+            card.className = "stat-card " + (pct >= 0 ? "up" : "down");
+            document.getElementById("s-high").textContent = fmtNum(q.high);
+            document.getElementById("s-low").textContent = fmtNum(q.low);
+            document.getElementById("s-vol").textContent = fmtVol(q.volume);
+        }
+
+        function showChart(history) {
+            if (!history || !history.length) return;
+            const labels = history.map(h => h.date);
+            const closes = history.map(h => h.close);
+            const highs = history.map(h => h.high);
+            const lows = history.map(h => h.low);
+            const ctx = document.getElementById("priceChart");
+            if (priceChart) priceChart.destroy();
+            priceChart = new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: "Close",
+                            data: closes,
+                            borderColor: "#00d4ff",
+                            backgroundColor: "rgba(0,212,255,0.08)",
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 2,
+                            pointHoverRadius: 5,
+                        },
+                        {
+                            label: "High",
+                            data: highs,
+                            borderColor: "rgba(255,71,87,0.4)",
+                            borderWidth: 1,
+                            borderDash: [4, 2],
+                            pointRadius: 0,
+                            fill: false,
+                        },
+                        {
+                            label: "Low",
+                            data: lows,
+                            borderColor: "rgba(46,213,115,0.4)",
+                            borderWidth: 1,
+                            borderDash: [4, 2],
+                            pointRadius: 0,
+                            fill: false,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { intersect: false, mode: "index" },
+                    plugins: {
+                        legend: { labels: { color: "#888", usePointStyle: true, pointStyle: "line" } },
+                        tooltip: {
+                            backgroundColor: "#1a1a2e",
+                            titleColor: "#00d4ff",
+                            bodyColor: "#e0e0e0",
+                            borderColor: "#2a2a3e",
+                            borderWidth: 1,
+                        }
+                    },
+                    scales: {
+                        x: { ticks: { color: "#666", maxTicksLimit: 10 }, grid: { color: "#1a1a2e" } },
+                        y: { ticks: { color: "#666" }, grid: { color: "#1a1a2e" } }
+                    }
+                }
+            });
+        }
+
+        function showAnalysis(text) {
+            document.getElementById("analysis-text").textContent = text || "No analysis available";
+        }
+
+        async function loadHistory() {
+            try {
+                const res = await fetch("/api/stocks");
+                const items = await res.json();
+                const tbody = document.getElementById("history-table");
+                const empty = document.getElementById("empty-msg");
+                if (!items.length) {
+                    tbody.innerHTML = "";
+                    empty.style.display = "block";
+                    return;
+                }
+                empty.style.display = "none";
+                tbody.innerHTML = items.map(function(item, i) {
+                    const pct = item.change_pct || 0;
+                    const cls = pct >= 0 ? "up" : "down";
+                    const sign = pct >= 0 ? "+" : "";
+                    return '<tr><td>' + (i+1) + '</td>'
+                        + '<td>' + esc(item.symbol) + '</td>'
+                        + '<td>' + esc(item.name) + '</td>'
+                        + '<td>' + fmtNum(item.price) + '</td>'
+                        + '<td class="' + cls + '">' + sign + fmtNum(pct) + '%</td>'
+                        + '<td>' + new Date(item.queried_at).toLocaleString("zh-CN") + '</td>'
+                        + '<td><button class="small" onclick="quickQuery(\\'' + item.symbol.replace(/^(sh|sz|bj)/, '') + '\\')">Re-query</button></td></tr>';
+                }).join("");
+            } catch(e) {}
+        }
+
+        async function clearHistory() {
+            await fetch("/api/stocks/clear", {method: "POST"});
+            loadHistory();
+        }
+
+        function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+        // Load history on page load
+        loadHistory();
+    </script>
+</body>
+</html>'''
+
 
 def _build_dashboard_python(app_name: str, entity: str, fields: list) -> str:
     """Build Flask backend for API dashboard app with query endpoint."""

@@ -111,20 +111,29 @@ def create_app(app_name: str, description: str, code: str = "",
             html_template, encoding="utf-8"
         )
 
-    # Create launcher script and desktop shortcut immediately
-    # (they just write files, don't need venv to exist)
-    _create_launcher(app_dir, app_name, description)
-    shortcut_path = _create_shortcut(app_dir, app_name, description)
-
-    # Create virtual environment in background thread to avoid
-    # blocking the MCP stdio communication (venv + pip can take minutes)
     final_req = requirements
+
     def _bg_setup():
+        import traceback as _tb
+        try:
+            _create_launcher(app_dir, app_name, description)
+            _create_shortcut(app_dir, app_name, description)
+        except Exception as e:
+            try:
+                with open(app_dir / ".setup.log", "a", encoding="utf-8") as lf:
+                    lf.write(f"[launcher/shortcut error] {e}\n{_tb.format_exc()}\n")
+            except Exception:
+                pass
         try:
             ok = _setup_venv(app_dir, final_req)
             _update_app_status(app_dir, "ready" if ok else "setup_failed")
-        except Exception:
+        except Exception as e:
             _update_app_status(app_dir, "setup_failed")
+            try:
+                with open(app_dir / ".setup.log", "a", encoding="utf-8") as lf:
+                    lf.write(f"[venv error] {e}\n{_tb.format_exc()}\n")
+            except Exception:
+                pass
 
     t = threading.Thread(target=_bg_setup, daemon=True)
     t.start()
@@ -134,11 +143,11 @@ def create_app(app_name: str, description: str, code: str = "",
         "app_id": app_id,
         "app_name": app_name,
         "app_dir": str(app_dir),
-        "shortcut": shortcut_path,
+        "shortcut": None,
         "status": "setting_up",
         "message": (
             f"App '{app_name}' created at {app_dir}. "
-            f"Dependencies are installing in background — "
+            f"Launcher, shortcut and dependencies are being set up in background — "
             f"the app will be ready to run shortly."
         ),
     }
@@ -178,7 +187,7 @@ def list_apps() -> dict:
 
 
 def get_app(app_name: str) -> dict:
-    """Get detailed information about a specific app."""
+    """Get metadata about a specific app (no full code/HTML to keep responses small)."""
     app_dir = get_app_dir(app_name)
     app_json = app_dir / "app.json"
 
@@ -190,23 +199,16 @@ def get_app(app_name: str) -> dict:
     except (json.JSONDecodeError, OSError) as e:
         return {"error": f"Failed to read app metadata: {e}"}
 
-    # Read source code
+    # Count lines of code (lightweight)
     main_py = app_dir / "main.py"
-    code = ""
+    code_lines = 0
     if main_py.exists():
-        code = main_py.read_text(encoding="utf-8")
+        code_lines = len(main_py.read_text(encoding="utf-8").splitlines())
 
-    # Read HTML template
     html_path = app_dir / "templates" / "index.html"
-    html_template = ""
+    html_lines = 0
     if html_path.exists():
-        html_template = html_path.read_text(encoding="utf-8")
-
-    # Read requirements
-    req_path = app_dir / "requirements.txt"
-    requirements = ""
-    if req_path.exists():
-        requirements = req_path.read_text(encoding="utf-8")
+        html_lines = len(html_path.read_text(encoding="utf-8").splitlines())
 
     return {
         "id": meta.get("id", app_name),
@@ -219,9 +221,8 @@ def get_app(app_name: str) -> dict:
         "template": meta.get("template", "web_app"),
         "config": meta.get("config", {}),
         "dir": str(app_dir),
-        "code": code,
-        "html_template": html_template,
-        "requirements": requirements,
+        "code_lines": code_lines,
+        "html_lines": html_lines,
     }
 
 
@@ -278,6 +279,10 @@ def update_app(app_name: str, code: str = None, html_template: str = None,
 
     # Start background venv rebuild AFTER writing metadata to avoid race
     if requirements is not None:
+        ready_marker = app_dir / ".venv-ready"
+        if ready_marker.exists():
+            ready_marker.unlink()
+
         def _bg_reinstall():
             try:
                 ok = _setup_venv(app_dir, requirements)
@@ -335,30 +340,58 @@ def delete_app(app_name: str) -> dict:
 def _setup_venv(app_dir: Path, requirements: str) -> bool:
     """Create a virtual environment and install dependencies."""
     venv_dir = app_dir / "venv"
+    ready_marker = app_dir / ".venv-ready"
+    debug_log = app_dir / ".venv-setup.log"
 
     try:
-        # Create venv if it doesn't exist
-        if not venv_dir.exists():
-            subprocess.run(
-                [sys.executable, "-m", "venv", str(venv_dir)],
-                capture_output=True, timeout=120, check=True,
-            )
+        with open(debug_log, "a", encoding="utf-8") as log:
+            log.write(f"[{datetime.now().isoformat()}] Starting _setup_venv\n")
+            log.write(f"  sys.executable: {sys.executable}\n")
+            log.write(f"  venv_dir: {venv_dir}\n")
+            log.write(f"  requirements: {requirements!r}\n")
+            log.flush()
 
-        # Determine pip path
-        if sys.platform == "win32":
-            pip_path = str(venv_dir / "Scripts" / "pip")
-        else:
-            pip_path = str(venv_dir / "bin" / "pip")
+            if not venv_dir.exists():
+                result = subprocess.run(
+                    [sys.executable, "-m", "venv", str(venv_dir)],
+                    capture_output=True, timeout=120, check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+                log.write(f"  venv create: returncode={result.returncode}\n")
+                if result.returncode != 0:
+                    log.write(f"  venv stderr: {result.stderr.decode('utf-8', errors='replace')[:500]}\n")
+                log.flush()
 
-        # Install requirements
-        if requirements and requirements.strip():
-            subprocess.run(
-                [pip_path, "install", "-r", str(app_dir / "requirements.txt")],
-                capture_output=True, timeout=300, check=False,
-            )
+            if sys.platform == "win32":
+                pip_path = str(venv_dir / "Scripts" / "pip")
+            else:
+                pip_path = str(venv_dir / "bin" / "pip")
+
+            log.write(f"  pip_path: {pip_path}\n")
+            log.write(f"  pip exists: {Path(pip_path).exists() or Path(pip_path + '.exe').exists()}\n")
+            log.flush()
+
+            if requirements and requirements.strip():
+                result = subprocess.run(
+                    [pip_path, "install", "-r", str(app_dir / "requirements.txt")],
+                    capture_output=True, timeout=300, check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+                log.write(f"  pip install: returncode={result.returncode}\n")
+                if result.returncode != 0:
+                    log.write(f"  pip stderr: {result.stderr.decode('utf-8', errors='replace')[:500]}\n")
+                log.flush()
+
+            ready_marker.write_text("ok", encoding="utf-8")
+            log.write(f"[{datetime.now().isoformat()}] _setup_venv completed OK\n")
 
         return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        try:
+            with open(debug_log, "a", encoding="utf-8") as log:
+                log.write(f"[{datetime.now().isoformat()}] _setup_venv FAILED: {type(e).__name__}: {e}\n")
+        except Exception:
+            pass
         return False
 
 
@@ -377,7 +410,14 @@ def _update_app_status(app_dir: Path, status: str):
 
 
 def get_venv_python(app_dir: Path) -> Optional[str]:
-    """Get the Python executable path inside the app's venv."""
+    """Get the Python executable path inside the app's venv.
+
+    Only returns a path when the venv is fully set up (dependencies installed).
+    """
+    ready_marker = app_dir / ".venv-ready"
+    if not ready_marker.exists():
+        return None
+
     venv_dir = app_dir / "venv"
     if sys.platform == "win32":
         python_path = venv_dir / "Scripts" / "python.exe"
@@ -546,6 +586,7 @@ $s.Save()
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_script],
                 capture_output=True, timeout=10, text=True,
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0 and lnk_path.exists():
                 return str(lnk_path)

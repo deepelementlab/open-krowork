@@ -8,6 +8,11 @@ import os
 import sys
 import traceback
 
+if sys.stdin.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+if sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # Ensure local imports work regardless of cwd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -29,24 +34,48 @@ from auto_improve import auto_improve, list_improvements
 
 # --- MCP Protocol Helpers ---
 
-def send_result(result: dict):
+_LOG_FILE = None
+
+
+def _init_log():
+    global _LOG_FILE
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".krowork-logs")
+    os.makedirs(log_dir, exist_ok=True)
+    from datetime import datetime
+    log_name = f"mcp-server-{datetime.now().strftime('%Y%m%d')}.log"
+    _LOG_FILE = os.path.join(log_dir, log_name)
+
+
+def _log(msg: str):
+    try:
+        print(msg, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    try:
+        if _LOG_FILE is None:
+            _init_log()
+        from datetime import datetime
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+    except Exception:
+        pass
+
+
+def send_result(result: dict, msg_id=None):
     """Send a JSON-RPC result response."""
-    msg = {"jsonrpc": "2.0", "id": _current_id, "result": result}
+    msg = {"jsonrpc": "2.0", "id": msg_id, "result": result}
     sys.stdout.write(json.dumps(msg) + "\n")
     sys.stdout.flush()
 
 
-def send_error(code: int, message: str, data=None):
+def send_error(code: int, message: str, data=None, msg_id=None):
     """Send a JSON-RPC error response."""
     error = {"code": code, "message": message}
     if data is not None:
         error["data"] = data
-    msg = {"jsonrpc": "2.0", "id": _current_id, "error": error}
+    msg = {"jsonrpc": "2.0", "id": msg_id, "error": error}
     sys.stdout.write(json.dumps(msg) + "\n")
     sys.stdout.flush()
-
-
-_current_id = None
 
 # --- Tool Definitions ---
 
@@ -54,44 +83,26 @@ TOOLS = [
     {
         "name": "krowork_create_app",
         "description": (
-            "Create a new KroWork local app. If 'code' is not provided, "
-            "automatically generates a complete working application based on "
-            "the description. Generates project structure with Flask web server, "
-            "creates a desktop shortcut, and installs dependencies in the background. "
-            "The app will be ready to run shortly after creation."
+            "Create a new KroWork local app from a natural language description. "
+            "The system auto-generates a complete Flask web application, creates a desktop shortcut, "
+            "and installs dependencies in the background. "
+            "Just provide app_name and description — the system handles all code generation."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "app_name": {
                     "type": "string",
-                    "description": "Name for the app (lowercase, hyphens allowed)",
+                    "description": "Name for the app (lowercase, hyphens allowed). Example: 'todo-manager'",
                 },
                 "description": {
                     "type": "string",
-                    "description": "Human-readable description of what the app does. "
-                    "Be specific about features, data fields, and behavior. "
-                    "Example: 'Stock analysis tool - input stock code, show price trends and analysis report'",
-                },
-                "code": {
-                    "type": "string",
-                    "description": "Optional: The main Python (Flask) application code. "
-                    "If omitted, the system auto-generates a complete app from the description.",
-                },
-                "requirements": {
-                    "type": "string",
-                    "description": "pip requirements (one per line), e.g. 'flask\\nrequests'",
-                },
-                "html_template": {
-                    "type": "string",
-                    "description": "Optional: HTML template for the web UI. "
-                    "If omitted, auto-generated from the description.",
+                    "description": "Detailed description of what the app does. The system auto-generates all code from this. "
+                    "Example: 'A task manager with priority levels, due dates, and status tracking'",
                 },
                 "config": {
                     "type": "object",
-                    "description": "Optional app configuration. "
-                    "Can include: entity_name, fields (array of {name, type, label}), "
-                    "features, api_url, etc.",
+                    "description": "Optional: app configuration like fields, features, etc.",
                 },
             },
             "required": ["app_name", "description"],
@@ -105,7 +116,8 @@ TOOLS = [
     {
         "name": "krowork_get_app",
         "description": (
-            "Get detailed info about a specific KroWork app, including full source code."
+            "Get metadata about a specific KroWork app (name, description, status, version). "
+            "Use this when you need to check an app's current state before modifying it."
         ),
         "inputSchema": {
             "type": "object",
@@ -554,222 +566,223 @@ TOOLS = [
 def handle_tool_call(name: str, arguments: dict) -> dict:
     """Dispatch a tool call to the appropriate handler."""
 
-    if name == "krowork_create_app":
-        code = arguments.get("code", "")
-        html_template = arguments.get("html_template", "")
-        requirements = arguments.get("requirements", "")
-        app_name = arguments["app_name"]
-        description = arguments["description"]
-        config = arguments.get("config")
+    try:
+        if name == "krowork_create_app":
+            code = arguments.get("code", "")
+            html_template = arguments.get("html_template", "")
+            requirements = arguments.get("requirements", "")
+            app_name = arguments["app_name"]
+            description = arguments["description"]
+            config = arguments.get("config")
 
-        # Auto-generate complete app when code is empty or just a skeleton
-        is_skeleton = (
-            not code.strip()
-            or code.strip().startswith("@")  # Just decorators, no logic
-            or (code.count("@app.route") <= 1 and code.count("def ") <= 2)
-        )
-        if is_skeleton or not html_template.strip():
-            generated = auto_generate_app(app_name, description, config)
-            if not code.strip():
-                code = generated["code"]
-            if not html_template.strip():
-                html_template = generated["html_template"]
-            if not requirements.strip():
-                requirements = generated["requirements"]
+            is_skeleton = (
+                not code.strip()
+                or code.strip().startswith("@")
+                or (code.count("@app.route") <= 1 and code.count("def ") <= 2)
+            )
+            if is_skeleton or not html_template.strip():
+                generated = auto_generate_app(app_name, description, config)
+                if not code.strip():
+                    code = generated["code"]
+                if not html_template.strip():
+                    html_template = generated["html_template"]
+                if not requirements.strip():
+                    requirements = generated["requirements"]
 
-        result = create_app(
-            app_name=app_name,
-            description=description,
-            code=code,
-            requirements=requirements,
-            html_template=html_template,
-            config=config,
-        )
+            result = create_app(
+                app_name=app_name,
+                description=description,
+                code=code,
+                requirements=requirements,
+                html_template=html_template,
+                config=config,
+            )
 
-    elif name == "krowork_list_apps":
-        result = list_apps()
+        elif name == "krowork_list_apps":
+            result = list_apps()
 
-    elif name == "krowork_get_app":
-        result = get_app(arguments["app_name"])
+        elif name == "krowork_get_app":
+            result = get_app(arguments["app_name"])
 
-    elif name == "krowork_run_app":
-        result = start_app(
-            app_name=arguments["app_name"],
-            port=arguments.get("port"),
-        )
+        elif name == "krowork_run_app":
+            result = start_app(
+                app_name=arguments["app_name"],
+                port=arguments.get("port"),
+            )
 
-    elif name == "krowork_stop_app":
-        result = stop_app(arguments["app_name"])
+        elif name == "krowork_stop_app":
+            result = stop_app(arguments["app_name"])
 
-    elif name == "krowork_update_app":
-        result = update_app(
-            app_name=arguments["app_name"],
-            code=arguments.get("code"),
-            html_template=arguments.get("html_template"),
-            requirements=arguments.get("requirements"),
-            description=arguments.get("description"),
-            config=arguments.get("config"),
-        )
+        elif name == "krowork_update_app":
+            result = update_app(
+                app_name=arguments["app_name"],
+                code=arguments.get("code"),
+                html_template=arguments.get("html_template"),
+                requirements=arguments.get("requirements"),
+                description=arguments.get("description"),
+                config=arguments.get("config"),
+            )
 
-    elif name == "krowork_delete_app":
-        result = delete_app(arguments["app_name"])
+        elif name == "krowork_delete_app":
+            result = delete_app(arguments["app_name"])
 
-    elif name == "krowork_app_status":
-        result = get_app_status(arguments["app_name"])
+        elif name == "krowork_app_status":
+            result = get_app_status(arguments["app_name"])
 
-    elif name == "krowork_get_app_log":
-        result = get_app_log(
-            app_name=arguments["app_name"],
-            tail=arguments.get("tail", 50),
-        )
+        elif name == "krowork_get_app_log":
+            result = get_app_log(
+                app_name=arguments["app_name"],
+                tail=arguments.get("tail", 50),
+            )
 
-    elif name == "krowork_create_shortcut":
-        result = create_shortcut_for_app(arguments["app_name"])
+        elif name == "krowork_create_shortcut":
+            result = create_shortcut_for_app(arguments["app_name"])
 
-    # --- Web Scraping ---
-    elif name == "krowork_scrape_page":
-        result = fetch_page(
-            url=arguments["url"],
-            timeout=arguments.get("timeout", 30),
-            cache_ttl=arguments.get("cache_ttl", 300),
-        )
+        elif name == "krowork_scrape_page":
+            result = fetch_page(
+                url=arguments["url"],
+                timeout=arguments.get("timeout", 30),
+                cache_ttl=arguments.get("cache_ttl", 300),
+            )
 
-    elif name == "krowork_scrape_elements":
-        result = extract_elements(
-            url=arguments["url"],
-            selector=arguments["selector"],
-        )
+        elif name == "krowork_scrape_elements":
+            result = extract_elements(
+                url=arguments["url"],
+                selector=arguments["selector"],
+            )
 
-    elif name == "krowork_scrape_rss":
-        result = scrape_rss(
-            url=arguments["url"],
-            max_items=arguments.get("max_items", 20),
-        )
+        elif name == "krowork_scrape_rss":
+            result = scrape_rss(
+                url=arguments["url"],
+                max_items=arguments.get("max_items", 20),
+            )
 
-    elif name == "krowork_scrape_table":
-        result = scrape_table(
-            url=arguments["url"],
-            table_index=arguments.get("table_index", 0),
-        )
+        elif name == "krowork_scrape_table":
+            result = scrape_table(
+                url=arguments["url"],
+                table_index=arguments.get("table_index", 0),
+            )
 
-    elif name == "krowork_scrape_api":
-        result = scrape_api(
-            url=arguments["url"],
-            method=arguments.get("method", "GET"),
-            body=arguments.get("body"),
-            headers=arguments.get("headers"),
-            params=arguments.get("params"),
-            json_path=arguments.get("json_path", ""),
-        )
+        elif name == "krowork_scrape_api":
+            result = scrape_api(
+                url=arguments["url"],
+                method=arguments.get("method", "GET"),
+                body=arguments.get("body"),
+                headers=arguments.get("headers"),
+                params=arguments.get("params"),
+                json_path=arguments.get("json_path", ""),
+            )
 
-    elif name == "krowork_monitor_page":
-        result = monitor_page(
-            url=arguments["url"],
-            selector=arguments["selector"],
-        )
+        elif name == "krowork_monitor_page":
+            result = monitor_page(
+                url=arguments["url"],
+                selector=arguments["selector"],
+            )
 
-    elif name == "krowork_preprocess_content":
-        result = preprocess_content(
-            url=arguments["url"],
-            max_length=arguments.get("max_length", 8000),
-        )
+        elif name == "krowork_preprocess_content":
+            result = preprocess_content(
+                url=arguments["url"],
+                max_length=arguments.get("max_length", 8000),
+            )
 
-    # --- Data Sources ---
-    elif name == "krowork_register_datasource":
-        result = register_source(
-            name=arguments["name"],
-            source_type=arguments["source_type"],
-            config=arguments["config"],
-        )
+        elif name == "krowork_register_datasource":
+            result = register_source(
+                name=arguments["name"],
+                source_type=arguments["source_type"],
+                config=arguments["config"],
+            )
 
-    elif name == "krowork_list_datasources":
-        result = list_sources()
+        elif name == "krowork_list_datasources":
+            result = list_sources()
 
-    elif name == "krowork_fetch_datasource":
-        result = fetch_data(arguments["source_name"])
+        elif name == "krowork_fetch_datasource":
+            result = fetch_data(arguments["source_name"])
 
-    elif name == "krowork_delete_datasource":
-        result = delete_source(arguments["name"])
+        elif name == "krowork_delete_datasource":
+            result = delete_source(arguments["name"])
 
-    # --- Export/Import ---
-    elif name == "krowork_export_app":
-        result = export_app(
-            app_name=arguments["app_name"],
-            output_path=arguments.get("output_path"),
-        )
+        elif name == "krowork_export_app":
+            result = export_app(
+                app_name=arguments["app_name"],
+                output_path=arguments.get("output_path"),
+            )
 
-    elif name == "krowork_import_app":
-        result = import_app(
-            krowork_path=arguments["krowork_path"],
-            new_name=arguments.get("new_name"),
-        )
+        elif name == "krowork_import_app":
+            result = import_app(
+                krowork_path=arguments["krowork_path"],
+                new_name=arguments.get("new_name"),
+            )
 
-    # --- Scheduler ---
-    elif name == "krowork_create_schedule":
-        result = create_schedule(
-            app_name=arguments["app_name"],
-            schedule_type=arguments.get("schedule_type", "daily"),
-            time_str=arguments.get("time_str", "08:00"),
-            days=arguments.get("days"),
-        )
+        elif name == "krowork_create_schedule":
+            result = create_schedule(
+                app_name=arguments["app_name"],
+                schedule_type=arguments.get("schedule_type", "daily"),
+                time_str=arguments.get("time_str", "08:00"),
+                days=arguments.get("days"),
+            )
 
-    elif name == "krowork_list_schedules":
-        result = list_schedules()
+        elif name == "krowork_list_schedules":
+            result = list_schedules()
 
-    elif name == "krowork_delete_schedule":
-        result = delete_schedule(arguments["app_name"])
+        elif name == "krowork_delete_schedule":
+            result = delete_schedule(arguments["app_name"])
 
-    # --- Cross-Device Sync ---
-    elif name == "krowork_sync_configure":
-        result = configure_sync(
-            target_dir=arguments["target_dir"],
-            device_name=arguments.get("device_name", ""),
-        )
+        elif name == "krowork_sync_configure":
+            result = configure_sync(
+                target_dir=arguments["target_dir"],
+                device_name=arguments.get("device_name", ""),
+            )
 
-    elif name == "krowork_sync_push":
-        result = sync_push(force=arguments.get("force", False))
+        elif name == "krowork_sync_push":
+            result = sync_push(force=arguments.get("force", False))
 
-    elif name == "krowork_sync_pull":
-        result = sync_pull(overwrite=arguments.get("overwrite", False))
+        elif name == "krowork_sync_pull":
+            result = sync_pull(overwrite=arguments.get("overwrite", False))
 
-    elif name == "krowork_sync_status":
-        result = sync_status()
+        elif name == "krowork_sync_status":
+            result = sync_status()
 
-    elif name == "krowork_sync_list_remote":
-        result = sync_list_remote()
+        elif name == "krowork_sync_list_remote":
+            result = sync_list_remote()
 
-    # --- Auto-Improve ---
-    elif name == "krowork_auto_improve":
-        result = auto_improve(
-            app_name=arguments["app_name"],
-            instruction=arguments["instruction"],
-        )
+        elif name == "krowork_auto_improve":
+            result = auto_improve(
+                app_name=arguments["app_name"],
+                instruction=arguments["instruction"],
+            )
 
-    elif name == "krowork_list_improvements":
-        result = list_improvements(arguments["app_name"])
+        elif name == "krowork_list_improvements":
+            result = list_improvements(arguments["app_name"])
 
-    else:
+        else:
+            return {
+                "content": [
+                    {"type": "text", "text": f"Unknown tool: {name}"}
+                ],
+                "isError": True,
+            }
+
+        if "error" in result:
+            return {
+                "content": [
+                    {"type": "text", "text": f"Error: {result['error']}"}
+                ],
+                "isError": True,
+            }
+
         return {
             "content": [
-                {"type": "text", "text": f"Unknown tool: {name}"}
+                {"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}
+            ],
+        }
+    except Exception as e:
+        _log(f"handle_tool_call error for '{name}': {e}\n{traceback.format_exc()}")
+        return {
+            "content": [
+                {"type": "text", "text": f"Error: {type(e).__name__}: {e}"}
             ],
             "isError": True,
         }
-
-    # Check for errors returned by handlers
-    if "error" in result:
-        return {
-            "content": [
-                {"type": "text", "text": f"Error: {result['error']}"}
-            ],
-            "isError": True,
-        }
-
-    return {
-        "content": [
-            {"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}
-        ],
-    }
 
 
 # --- JSON-RPC Message Handling ---
@@ -792,65 +805,75 @@ def handle_initialize(params: dict) -> dict:
 
 def process_message(msg: dict):
     """Process a single JSON-RPC message."""
-    global _current_id
-    _current_id = msg.get("id")
+    msg_id = msg.get("id")
 
     method = msg.get("method", "")
     params = msg.get("params", {})
 
-    # Notifications (no id) - just acknowledge
     if "id" not in msg:
         return
 
     if method == "initialize":
-        send_result(handle_initialize(params))
+        send_result(handle_initialize(params), msg_id)
 
     elif method == "initialized":
-        # Notification, no response needed
         pass
 
     elif method == "tools/list":
-        send_result({"tools": TOOLS})
+        send_result({"tools": TOOLS}, msg_id)
 
     elif method == "tools/call":
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
         try:
             result = handle_tool_call(tool_name, arguments)
-            send_result(result)
+            send_result(result, msg_id)
         except Exception as e:
-            send_error(-32603, f"Tool execution error: {e}", traceback.format_exc())
+            _log(f"tools/call error for '{tool_name}': {e}\n{traceback.format_exc()}")
+            try:
+                send_error(-32603, f"Tool error: {type(e).__name__}: {e}", msg_id=msg_id)
+            except Exception:
+                pass
 
     elif method == "ping":
-        send_result({})
+        send_result({}, msg_id)
 
     else:
-        send_error(-32601, f"Method not found: {method}")
+        send_error(-32601, f"Method not found: {method}", msg_id=msg_id)
 
 
 def main():
     """Main entry point - read JSON-RPC from stdin."""
-    # Log to stderr for debugging
-    print("Open-KroWork MCP Server starting (stdio)...", file=sys.stderr)
+    _log("Open-KroWork MCP Server starting (stdio)...")
 
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-            process_message(msg)
-        except json.JSONDecodeError as e:
-            error_msg = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32700, "message": f"Parse error: {e}"},
-            }
-            sys.stdout.write(json.dumps(error_msg) + "\n")
-            sys.stdout.flush()
-        except Exception as e:
-            print(f"Error processing message: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                process_message(msg)
+            except json.JSONDecodeError as e:
+                error_msg = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32700, "message": f"Parse error: {e}"},
+                }
+                sys.stdout.write(json.dumps(error_msg) + "\n")
+                sys.stdout.flush()
+            except Exception as e:
+                _log(f"Error processing message: {e}\n{traceback.format_exc()}")
+                try:
+                    send_error(-32603, f"Internal error: {e}", msg_id=None)
+                except Exception:
+                    pass
+    except KeyboardInterrupt:
+        _log("Server interrupted by user")
+    except Exception as e:
+        _log(f"Server fatal error: {e}\n{traceback.format_exc()}")
+    finally:
+        _log("Server shutting down")
 
 
 if __name__ == "__main__":
